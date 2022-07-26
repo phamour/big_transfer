@@ -22,6 +22,7 @@ import time
 import numpy as np
 import torch
 import torchvision as tv
+import wandb
 
 import bit_pytorch.fewshot as fs
 import bit_pytorch.lbtoolbox as lb
@@ -157,6 +158,8 @@ def mixup_criterion(criterion, pred, y_a, y_b, l):
 
 def main(args):
   expname = f"{args.model}-b{args.batch}-s{args.batch_split}-blr{args.base_lr}"
+  wandb.init(project="try-wandb", config=args)
+
   logger = bit_common.setup_logger(args)
 
   # Lets cuDNN benchmark conv implementations and choose the fastest.
@@ -250,6 +253,9 @@ def main(args):
       accstep = f" ({accum_steps}/{args.batch_split})" if args.batch_split > 1 else ""
       logger.info(f"[step {step}{accstep}]: loss={c_num:.5f} (lr={lr:.1e})")  # pylint: disable=logging-format-interpolation
       logger.flush()
+      if step % args.iter_report == 0 and accum_steps == args.batch_split:
+        wandb.log({'loss': c_num})
+        wandb.watch(model)
 
       # Update params
       if accum_steps == args.batch_split:
@@ -294,4 +300,5 @@ if __name__ == "__main__":
   parser.add_argument("--workers", type=int, default=8,
                       help="Number of background threads used to load data.")
   parser.add_argument("--no-save", dest="save", action="store_false")
+  parser.add_argument("--iter_report", type=int, default=100)
   main(parser.parse_args())
