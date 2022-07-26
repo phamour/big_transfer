@@ -19,6 +19,7 @@
 from os.path import join as pjoin  # pylint: disable=g-importing-member
 import time
 
+from comet_ml import Experiment
 import numpy as np
 import torch
 import torchvision as tv
@@ -157,6 +158,12 @@ def mixup_criterion(criterion, pred, y_a, y_b, l):
 
 def main(args):
   expname = f"{args.model}-b{args.batch}-s{args.batch_split}-blr{args.base_lr}"
+  experiment = Experiment(
+    api_key="axSTIhNv1Byt9CgiCSLigp0Wr",
+    project_name="try-cometml",
+    workspace="phamour",
+  )
+  experiment.log_parameters(args)
   logger = bit_common.setup_logger(args)
 
   # Lets cuDNN benchmark conv implementations and choose the fastest.
@@ -212,77 +219,75 @@ def main(args):
   end = time.time()
 
   with lb.Uninterrupt() as u:
-    for x, y in recycle(train_loader):
-      # measure data loading time, which is spent in the `for` statement.
-      chrono._done("load", time.time() - end)
+    with experiment.train():
+      for x, y in recycle(train_loader):
+        # measure data loading time, which is spent in the `for` statement.
+        chrono._done("load", time.time() - end)
 
-      if u.interrupted:
-        break
+        if u.interrupted:
+          break
 
-      # Schedule sending to GPU(s)
-      x = x.to(device, non_blocking=True)
-      y = y.to(device, non_blocking=True)
+        # Schedule sending to GPU(s)
+        x = x.to(device, non_blocking=True)
+        y = y.to(device, non_blocking=True)
 
-      # Update learning-rate, including stop training if over.
-      lr = bit_hyperrule.get_lr(step, len(train_set), args.base_lr)
-      if lr is None:
-        break
-      for param_group in optim.param_groups:
-        param_group["lr"] = lr
+        # Update learning-rate, including stop training if over.
+        lr = bit_hyperrule.get_lr(step, len(train_set), args.base_lr)
+        if lr is None:
+          break
+        for param_group in optim.param_groups:
+          param_group["lr"] = lr
 
-      if mixup > 0.0:
-        x, y_a, y_b = mixup_data(x, y, mixup_l)
-
-      # compute output
-      with chrono.measure("fprop"):
-        logits = model(x)
         if mixup > 0.0:
-          c = mixup_criterion(cri, logits, y_a, y_b, mixup_l)
-        else:
-          c = cri(logits, y)
-        c_num = float(c.data.cpu().numpy())  # Also ensures a sync point.
+          x, y_a, y_b = mixup_data(x, y, mixup_l)
 
-      # Accumulate grads
-      with chrono.measure("grads"):
-        (c / args.batch_split).backward()
-        accum_steps += 1
+        # compute output
+        with chrono.measure("fprop"):
+          logits = model(x)
+          if mixup > 0.0:
+            c = mixup_criterion(cri, logits, y_a, y_b, mixup_l)
+          else:
+            c = cri(logits, y)
+          c_num = float(c.data.cpu().numpy())  # Also ensures a sync point.
 
-      accstep = f" ({accum_steps}/{args.batch_split})" if args.batch_split > 1 else ""
-      logger.info(f"[step {step}{accstep}]: loss={c_num:.5f} (lr={lr:.1e})")  # pylint: disable=logging-format-interpolation
-      logger.flush()
+        # Accumulate grads
+        with chrono.measure("grads"):
+          (c / args.batch_split).backward()
+          accum_steps += 1
 
-      # Update params
-      if accum_steps == args.batch_split:
-        with chrono.measure("update"):
-          optim.step()
-          optim.zero_grad()
-        step += 1
-        accum_steps = 0
-        # Sample new mixup ratio for next batch
-        mixup_l = np.random.beta(mixup, mixup) if mixup > 0 else 1
+        accstep = f" ({accum_steps}/{args.batch_split})" if args.batch_split > 1 else ""
+        logger.info(f"[step {step}{accstep}]: loss={c_num:.5f} (lr={lr:.1e})")  # pylint: disable=logging-format-interpolation
+        logger.flush()
 
-        # Run evaluation and save the model.
-        if args.eval_every and step % args.eval_every == 0:
-          run_eval(model, valid_loader, device, chrono, logger, step)
-          if args.save:
-            checkpointname = f"{expname}-clr{lr}-{step}"
-            checkpointpath = pjoin(args.logdir, args.name, f"{checkpointname}.pth.tar")
-            torch.save({
-                "step": step,
-                "model": model.state_dict(),
-                "optim" : optim.state_dict(),
-            }, checkpointpath)
+        # Update params
+        if accum_steps == args.batch_split:
+          experiment.log_metric("loss", c_num, step=step)
+          with chrono.measure("update"):
+            optim.step()
+            optim.zero_grad()
+          step += 1
+          accum_steps = 0
+          # Sample new mixup ratio for next batch
+          mixup_l = np.random.beta(mixup, mixup) if mixup > 0 else 1
 
-      end = time.time()
+          # Run evaluation and save the model.
+          if args.eval_every and step % args.eval_every == 0:
+            run_eval(model, valid_loader, device, chrono, logger, step)
+            if args.save:
+              torch.save({
+                  "step": step,
+                  "model": model.state_dict(),
+                  "optim" : optim.state_dict(),
+              }, savename)
+
+        end = time.time()
 
     # Final eval at end of training.
-    run_eval(model, valid_loader, device, chrono, logger, step='end')
-    if args.save:
-      torch.save({
-          "step": step,
-          "model": model.state_dict(),
-          "optim" : optim.state_dict(),
-      }, savename)
+    with experiment.test():
+      all_c, all_top1, all_top5 = run_eval(model, valid_loader, device, chrono, logger, step='end')
+      experiment.log_metric('all_c', all_c)
+      experiment.log_metric('all_top1', all_top1)
+      experiment.log_metric('all_top5', all_top5)
 
   logger.info(f"Timings:\n{chrono}")
 
@@ -294,4 +299,5 @@ if __name__ == "__main__":
   parser.add_argument("--workers", type=int, default=8,
                       help="Number of background threads used to load data.")
   parser.add_argument("--no-save", dest="save", action="store_false")
+  parser.add_argument("--iter_report", type=int, default=1)
   main(parser.parse_args())
