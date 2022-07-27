@@ -280,7 +280,7 @@ def main(args):
             experiment.log_metric('all_top5', np.mean(all_top5), step=step+1)
             if args.save:
               checkpointname = f"{expname}-clr{lr}-{step+1}"
-              checkpointpath = f"{checkpointname}.pth.tar"
+              checkpointpath = pjoin(args.logdir, args.name, f"{checkpointname}.pth.tar")
               torch.save({
                   "step": step,
                   "model": model.state_dict(),
