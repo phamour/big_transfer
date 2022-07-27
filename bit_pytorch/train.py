@@ -315,4 +315,5 @@ if __name__ == "__main__":
                       help="Number of background threads used to load data.")
   parser.add_argument("--no-save", dest="save", action="store_false")
   parser.add_argument("--iter_report", type=int, default=1)
+  parser.add_argument("--comet_api_key", required=True)
   main(parser.parse_args())
