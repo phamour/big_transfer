@@ -263,7 +263,7 @@ def main(args):
 
         # Update params
         if accum_steps == args.batch_split:
-          experiment.log_metric("loss", c_num, step=step+1)
+          experiment.log_metric("loss", c_num, step=step)
           with chrono.measure("update"):
             optim.step()
             optim.zero_grad()
@@ -275,11 +275,11 @@ def main(args):
           # Run evaluation and save the model.
           if args.eval_every and step % args.eval_every == 0:
             all_c, all_top1, all_top5 = run_eval(model, valid_loader, device, chrono, logger, step)
-            experiment.log_metric('all_c', np.mean(all_c), step=step+1)
-            experiment.log_metric('all_top1', np.mean(all_top1), step=step+1)
-            experiment.log_metric('all_top5', np.mean(all_top5), step=step+1)
+            experiment.log_metric('all_c', np.mean(all_c), step=step)
+            experiment.log_metric('all_top1', np.mean(all_top1), step=step)
+            experiment.log_metric('all_top5', np.mean(all_top5), step=step)
             if args.save:
-              checkpointname = f"{expname}-clr{lr}-{step+1}"
+              checkpointname = f"{expname}-clr{lr}-{step}"
               checkpointpath = pjoin(args.logdir, args.name, f"{checkpointname}.pth.tar")
               torch.save({
                   "step": step,
@@ -293,9 +293,9 @@ def main(args):
     # Final eval at end of training.
     with experiment.test():
       all_c, all_top1, all_top5 = run_eval(model, valid_loader, device, chrono, logger, step='end')
-      experiment.log_metric('all_c', np.mean(all_c), step=step+1)
-      experiment.log_metric('all_top1', np.mean(all_top1), step=step+1)
-      experiment.log_metric('all_top5', np.mean(all_top5), step=step+1)
+      experiment.log_metric('all_c', np.mean(all_c), step=step)
+      experiment.log_metric('all_top1', np.mean(all_top1), step=step)
+      experiment.log_metric('all_top5', np.mean(all_top5), step=step)
       if args.save:
         torch.save({
             "step": step,
