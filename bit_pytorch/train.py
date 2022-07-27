@@ -159,11 +159,13 @@ def mixup_criterion(criterion, pred, y_a, y_b, l):
 def main(args):
   expname = f"{args.model}-b{args.batch}-s{args.batch_split}-blr{args.base_lr}"
   experiment = Experiment(
-    api_key="axSTIhNv1Byt9CgiCSLigp0Wr",
+    api_key=args.comet_api_key,
     project_name="try-cometml",
     workspace="phamour",
   )
+  experiment.set_name(expname)
   experiment.log_parameters(args)
+  experiment.add_tags([args.model, f"lr{args.base_lr}"])
   logger = bit_common.setup_logger(args)
 
   # Lets cuDNN benchmark conv implementations and choose the fastest.
@@ -261,7 +263,7 @@ def main(args):
 
         # Update params
         if accum_steps == args.batch_split:
-          experiment.log_metric("loss", c_num, step=step)
+          experiment.log_metric("loss", c_num, step=step+1)
           with chrono.measure("update"):
             optim.step()
             optim.zero_grad()
@@ -272,22 +274,35 @@ def main(args):
 
           # Run evaluation and save the model.
           if args.eval_every and step % args.eval_every == 0:
-            run_eval(model, valid_loader, device, chrono, logger, step)
+            all_c, all_top1, all_top5 = run_eval(model, valid_loader, device, chrono, logger, step)
+            experiment.log_metric('all_c', np.mean(all_c), step=step+1)
+            experiment.log_metric('all_top1', np.mean(all_top1), step=step+1)
+            experiment.log_metric('all_top5', np.mean(all_top5), step=step+1)
             if args.save:
+              checkpointname = f"{expname}-clr{lr}-{step+1}"
+              checkpointpath = f"{checkpointname}.pth.tar"
               torch.save({
                   "step": step,
                   "model": model.state_dict(),
                   "optim" : optim.state_dict(),
-              }, savename)
+              }, checkpointpath)
+              experiment.log_model(checkpointname, checkpointpath)
 
         end = time.time()
 
     # Final eval at end of training.
     with experiment.test():
       all_c, all_top1, all_top5 = run_eval(model, valid_loader, device, chrono, logger, step='end')
-      experiment.log_metric('all_c', all_c)
-      experiment.log_metric('all_top1', all_top1)
-      experiment.log_metric('all_top5', all_top5)
+      experiment.log_metric('all_c', np.mean(all_c), step=step+1)
+      experiment.log_metric('all_top1', np.mean(all_top1), step=step+1)
+      experiment.log_metric('all_top5', np.mean(all_top5), step=step+1)
+      if args.save:
+        torch.save({
+            "step": step,
+            "model": model.state_dict(),
+            "optim" : optim.state_dict(),
+        }, savename)
+        experiment.log_model(expname, savename)
 
   logger.info(f"Timings:\n{chrono}")
 
