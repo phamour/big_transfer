@@ -158,9 +158,22 @@ def mixup_criterion(criterion, pred, y_a, y_b, l):
 
 def main(args):
   expname = f"{args.model}-b{args.batch}-s{args.batch_split}-blr{args.base_lr}"
-  wandb.init(project="try-wandb", config=args)
+
+  wandb.init(
+    project="try-wandb",
+    name=expname,
+    config=args,
+    tags=[args.model, f"lr{args.base_lr}"],
+  )
+  dataset_artifact = wandb.Artifact("CIFAR-100", type="dataset")
+  dataset_artifact.add_dir(args.datadir)
+  wandb.use_artifact(dataset_artifact)
 
   logger = bit_common.setup_logger(args)
+
+  logger.info("================")
+  logger.info(vars(wandb.run))
+  logger.info("================")
 
   # Lets cuDNN benchmark conv implementations and choose the fastest.
   # Only good if sizes stay the same within the main loop!
@@ -183,6 +196,7 @@ def main(args):
   # Load it to CPU first as we'll move the model to GPU later.
   # This way, we save a little bit of GPU memory when loading.
   step = 0
+  best = 0
 
   # Note: no weight-decay!
   optim = torch.optim.SGD(model.parameters(), lr=0.003, momentum=0.9)
@@ -253,12 +267,10 @@ def main(args):
       accstep = f" ({accum_steps}/{args.batch_split})" if args.batch_split > 1 else ""
       logger.info(f"[step {step}{accstep}]: loss={c_num:.5f} (lr={lr:.1e})")  # pylint: disable=logging-format-interpolation
       logger.flush()
-      if step % args.iter_report == 0 and accum_steps == args.batch_split:
-        wandb.log({'loss': c_num})
-        wandb.watch(model)
 
       # Update params
       if accum_steps == args.batch_split:
+        wandb.log({'train_loss': c_num}, step=step)
         with chrono.measure("update"):
           optim.step()
           optim.zero_grad()
@@ -269,26 +281,56 @@ def main(args):
 
         # Run evaluation and save the model.
         if args.eval_every and step % args.eval_every == 0:
-          run_eval(model, valid_loader, device, chrono, logger, step)
-          if args.save:
+          _, all_top1, all_top5 = run_eval(model, valid_loader, device, chrono, logger, step)
+          _acc = np.mean(all_top5)
+          wandb.log(
+            {
+              'all_top1': np.mean(all_top1),
+              'all_top5': _acc,
+            },
+            step=step,
+          )
+          if args.save and _acc > best:
+            best = _acc
             checkpointname = f"{expname}-clr{lr}-{step}"
-            checkpointpath = pjoin(args.logdir, args.name, f"{checkpointname}.pth.tar")
             torch.save({
                 "step": step,
                 "model": model.state_dict(),
                 "optim" : optim.state_dict(),
-            }, checkpointpath)
+            }, savename)
+            model_artifact = wandb.log_artifact(
+              savename,
+              name=checkpointname,
+              type="model",
+              aliases=["latest"],
+            )
+            wandb.run.link_artifact(model_artifact, 'phamour/try-wandb/BiT', ["latest"])
 
       end = time.time()
 
     # Final eval at end of training.
-    run_eval(model, valid_loader, device, chrono, logger, step='end')
-    if args.save:
+    _, all_top1, all_top5 = run_eval(model, valid_loader, device, chrono, logger, step='end')
+    _acc = np.mean(all_top5)
+    wandb.log(
+      {
+        'all_top1': np.mean(all_top1),
+        'all_top5': _acc,
+      },
+      step=step,
+    )
+    if args.save and _acc > best:
       torch.save({
           "step": step,
           "model": model.state_dict(),
           "optim" : optim.state_dict(),
       }, savename)
+      model_artifact = wandb.log_artifact(
+        savename,
+        name=expname,
+        type="model",
+        aliases=["latest"],
+      )
+      wandb.run.link_artifact(model_artifact, 'phamour/try-wandb/BiT', ["latest"])
 
   logger.info(f"Timings:\n{chrono}")
 
