@@ -19,6 +19,7 @@
 from os.path import join as pjoin  # pylint: disable=g-importing-member
 import time
 
+import neptune.new as neptune
 import numpy as np
 import torch
 import torchvision as tv
@@ -157,6 +158,13 @@ def mixup_criterion(criterion, pred, y_a, y_b, l):
 
 def main(args):
   expname = f"{args.model}-b{args.batch}-s{args.batch_split}-blr{args.base_lr}"
+
+  run = neptune.init(
+    project="phamour/try-neptune",
+    api_token=args.neptune_token,
+  )
+  run['parameters'] = vars(args)
+
   logger = bit_common.setup_logger(args)
 
   # Lets cuDNN benchmark conv implementations and choose the fastest.
@@ -253,6 +261,7 @@ def main(args):
 
       # Update params
       if accum_steps == args.batch_split:
+        run['train/loss'].log(c_num)
         with chrono.measure("update"):
           optim.step()
           optim.zero_grad()
@@ -263,7 +272,9 @@ def main(args):
 
         # Run evaluation and save the model.
         if args.eval_every and step % args.eval_every == 0:
-          run_eval(model, valid_loader, device, chrono, logger, step)
+          _, all_top1, all_top5 = run_eval(model, valid_loader, device, chrono, logger, step)
+          run['eval/all_top1'].log(np.mean(all_top1))
+          run['eval/all_top5'].log(np.mean(all_top5))
           if args.save:
             checkpointname = f"{expname}-clr{lr}-{step}"
             checkpointpath = pjoin(args.logdir, args.name, f"{checkpointname}.pth.tar")
@@ -276,7 +287,9 @@ def main(args):
       end = time.time()
 
     # Final eval at end of training.
-    run_eval(model, valid_loader, device, chrono, logger, step='end')
+    _, all_top1, all_top5 = run_eval(model, valid_loader, device, chrono, logger, step='end')
+    run['eval/all_top1'].log(np.mean(all_top1))
+    run['eval/all_top5'].log(np.mean(all_top5))
     if args.save:
       torch.save({
           "step": step,
@@ -285,6 +298,7 @@ def main(args):
       }, savename)
 
   logger.info(f"Timings:\n{chrono}")
+  run.stop()
 
 
 if __name__ == "__main__":
@@ -294,4 +308,5 @@ if __name__ == "__main__":
   parser.add_argument("--workers", type=int, default=8,
                       help="Number of background threads used to load data.")
   parser.add_argument("--no-save", dest="save", action="store_false")
+  parser.add_argument("--neptune_token", required=True)
   main(parser.parse_args())
