@@ -296,6 +296,15 @@ def main(args):
           "model": model.state_dict(),
           "optim" : optim.state_dict(),
       }, savename)
+      model_version = neptune.init_model_version(
+        model="TRYNEP-BIT",
+        project="phamour/try-neptune",
+        api_token=args.neptune_token,
+      )
+      model_version['model'].upload(savename)
+      model_version['validation/all_top1'] = np.mean(all_top1)
+      model_version['validation/all_top5'] = np.mean(all_top5)
+      model_version.change_stage('staging')
 
   logger.info(f"Timings:\n{chrono}")
   run.stop()
