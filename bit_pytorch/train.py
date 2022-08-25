@@ -22,6 +22,8 @@ import time
 import numpy as np
 import torch
 import torchvision as tv
+from verta import Client
+from verta.dataset import Path as VPath
 
 import bit_pytorch.fewshot as fs
 import bit_pytorch.lbtoolbox as lb
@@ -159,6 +161,16 @@ def main(args):
   expname = f"{args.model}-b{args.batch}-s{args.batch_split}-blr{args.base_lr}"
   logger = bit_common.setup_logger(args)
 
+  verta_client = Client(args.verta_host)
+  verta_project = verta_client.set_project("try-verta")
+  verta_exp = verta_client.set_experiment("Big Transfer")
+  verta_run = verta_client.set_experiment_run(expname + str(time.time()))
+  verta_run.log_hyperparameters(vars(args))
+
+  verta_dataset = verta_client.get_or_create_dataset("CIFAR-100")
+  verta_dataset_version = verta_dataset.create_version(VPath(args.datadir))
+  verta_run.log_dataset("CIFAR-100", verta_dataset_version)
+
   # Lets cuDNN benchmark conv implementations and choose the fastest.
   # Only good if sizes stay the same within the main loop!
   torch.backends.cudnn.benchmark = True
@@ -253,6 +265,7 @@ def main(args):
 
       # Update params
       if accum_steps == args.batch_split:
+        # verta_run.log_metric('train_loss', c_num)
         with chrono.measure("update"):
           optim.step()
           optim.zero_grad()
@@ -263,7 +276,11 @@ def main(args):
 
         # Run evaluation and save the model.
         if args.eval_every and step % args.eval_every == 0:
-          run_eval(model, valid_loader, device, chrono, logger, step)
+          _, all_top1, all_top5 = run_eval(model, valid_loader, device, chrono, logger, step)
+          # verta_run.log_metrics({
+          #   'all_top1': np.mean(all_top1),
+          #   'all_top5': np.mean(all_top5),
+          # })
           if args.save:
             checkpointname = f"{expname}-clr{lr}-{step}"
             checkpointpath = pjoin(args.logdir, args.name, f"{checkpointname}.pth.tar")
@@ -276,13 +293,19 @@ def main(args):
       end = time.time()
 
     # Final eval at end of training.
-    run_eval(model, valid_loader, device, chrono, logger, step='end')
+    loss, all_top1, all_top5 = run_eval(model, valid_loader, device, chrono, logger, step='end')
+    verta_run.log_metrics({
+      'loss': np.mean(loss),
+      'all_top1': np.mean(all_top1),
+      'all_top5': np.mean(all_top5),
+    })
     if args.save:
       torch.save({
           "step": step,
           "model": model.state_dict(),
           "optim" : optim.state_dict(),
       }, savename)
+      verta_run.log_model(savename)
 
   logger.info(f"Timings:\n{chrono}")
 
@@ -294,4 +317,5 @@ if __name__ == "__main__":
   parser.add_argument("--workers", type=int, default=8,
                       help="Number of background threads used to load data.")
   parser.add_argument("--no-save", dest="save", action="store_false")
+  parser.add_argument("--verta_host", type=str)
   main(parser.parse_args())
